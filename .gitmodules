@@ -1,0 +1,6 @@
+[submodule "externals/gaussian-splatting"]
+	path = externals/gaussian-splatting
+	url = https://github.com/graphdeco-inria/gaussian-splatting
+[submodule "externals/scenenn"]
+	path = externals/scenenn
+	url = https://github.com/hkust-vgd/scenenn.git
