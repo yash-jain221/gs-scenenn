@@ -53,12 +53,12 @@ run_step_if_missing_dir "convert_colmap" "data/scenenn/colmap/${SCENE_ID}/sparse
 run_step_if_missing "train" "output/scenenn/${SCENE_ID}/point_cloud/iteration_30000/point_cloud.ply" \
 	python externals/gaussian-splatting/train.py -s "data/scenenn/colmap/${SCENE_ID}"   -m "output/scenenn/${SCENE_ID}"   --eval   --iterations 30000   --test_iterations 15000 30000   --save_iterations 7000 15000 30000
 
-if has_render_outputs "/mnt/c/Users/Yash/Desktop/MS/Dissertation/output/scenenn/${SCENE_ID}"; then
+if has_render_outputs "output/scenenn/${SCENE_ID}"; then
 	echo "Skipping render (already done)"
 else
 	echo "Running render..."
-	python externals/gaussian-splatting/render.py -m /mnt/c/Users/Yash/Desktop/MS/Dissertation/output/scenenn/${SCENE_ID} -s /mnt/c/Users/Yash/Desktop/MS/Dissertation/data/scenenn/colmap/${SCENE_ID}
+	python externals/gaussian-splatting/render.py -m "output/scenenn/${SCENE_ID}" -s "data/scenenn/colmap/${SCENE_ID}"
 fi
 
-run_step_if_missing "metrics" "/mnt/c/Users/Yash/Desktop/MS/Dissertation/output/scenenn/${SCENE_ID}/results.json" \
-	python externals/gaussian-splatting/metrics.py -m /mnt/c/Users/Yash/Desktop/MS/Dissertation/output/scenenn/${SCENE_ID}
+run_step_if_missing "metrics" "output/scenenn/${SCENE_ID}/results.json" \
+	python externals/gaussian-splatting/metrics.py -m "output/scenenn/${SCENE_ID}"
