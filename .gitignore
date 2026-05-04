@@ -1,2 +1,7 @@
 *data*
 *output*
+*analysis*
+*.ipynb_checkpoints
+*.log
+*.tmp
+*scene_ids*
