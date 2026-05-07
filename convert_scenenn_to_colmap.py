@@ -29,6 +29,19 @@ def parse_args():
                         help="Consecutive-segment window size N for blur removal (default: 7, from GS-Blur NeurIPS 2024)")
     parser.add_argument("--blur-vote-fraction", type=float, default=0.5,
                         help="Fraction of window that must be blurry to drop whole segment (default: 0.5, from Open-Sora 2.0)")
+
+    overexp_group = parser.add_mutually_exclusive_group()
+    overexp_group.add_argument("--overexp-fixed", type=float, default=None,
+                               metavar="FRACTION",
+                               help="Drop frames with saturated-pixel fraction above this threshold (e.g. 0.02)")
+    overexp_group.add_argument("--overexp-percentile", type=float, default=None,
+                               metavar="PCT",
+                               help="Drop the top PCT%% of frames by overexposure score per scene (e.g. 10)")
+
+    parser.add_argument("--overexp-window", type=int, default=7,
+                        help="Consecutive-segment window size N for overexposure removal (default: 7)")
+    parser.add_argument("--overexp-vote-fraction", type=float, default=0.5,
+                        help="Fraction of window that must be overexposed to drop whole segment (default: 0.5)")
     return parser.parse_args()
 
 
@@ -126,6 +139,87 @@ def apply_blur_filter(images_dir, filenames, args):
         "isolated_dropped": isolated_dropped,
         "total_dropped"   : seg_dropped + isolated_dropped,
         "remaining"       : len(final),
+    }
+    return final, stats
+
+
+def compute_overexp_scores(images_dir, filenames, sat_thresh=250):
+    """Compute overexposure score as fraction of near-white pixels per image."""
+    scores = {}
+    for fname in filenames:
+        img = cv2.imread(os.path.join(images_dir, fname), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            scores[fname] = 0.0
+        else:
+            scores[fname] = float(np.mean(img >= sat_thresh))
+    return scores
+
+
+def remove_consecutive_overexp_segments(filenames, scores, threshold, window=7, vote_fraction=0.5):
+    """
+    Mark frames as bad if they belong to a consecutive run where >= vote_fraction
+    of a centred window of size `window` has score > threshold.
+
+    Returns (filtered_filenames, n_dropped).
+    """
+    n    = len(filenames)
+    bad  = [False] * n
+    half = window // 2
+
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        window_fnames     = filenames[lo:hi]
+        overexp_in_window = sum(1 for f in window_fnames if scores[f] > threshold)
+        if overexp_in_window / len(window_fnames) >= vote_fraction:
+            bad[i] = True
+
+    kept    = [f for f, b in zip(filenames, bad) if not b]
+    dropped = sum(bad)
+    return kept, dropped
+
+
+def apply_overexp_filter(images_dir, filenames, args):
+    """
+    Compute overexposure scores and filter frames.
+    Applies fixed OR percentile threshold (mutually exclusive flags), then
+    removes consecutive overexposed segments using sliding-window majority vote.
+    Returns (filtered_filenames, stats_dict).
+    """
+    if args.overexp_fixed is None and args.overexp_percentile is None:
+        return filenames, {}
+
+    print("  Computing overexposure scores...")
+    scores = compute_overexp_scores(images_dir, filenames)
+
+    if args.overexp_percentile is not None:
+        all_scores = [scores[f] for f in filenames]
+        threshold  = float(np.percentile(all_scores, 100 - args.overexp_percentile))
+        print(f"  Relative threshold (top {args.overexp_percentile}%): {threshold:.4f}")
+    else:
+        threshold = args.overexp_fixed
+        print(f"  Fixed threshold: {threshold:.4f}")
+
+    avg_score            = float(np.mean([scores[f] for f in filenames]))
+    above_before         = sum(1 for f in filenames if scores[f] > threshold)
+    print(f"  Avg overexp score: {avg_score:.4f}  |  Above threshold before seg-removal: {above_before}")
+
+    after_seg, seg_dropped = remove_consecutive_overexp_segments(
+        filenames, scores, threshold,
+        window=args.overexp_window,
+        vote_fraction=args.overexp_vote_fraction
+    )
+
+    final            = [f for f in after_seg if scores[f] <= threshold]
+    isolated_dropped = len(after_seg) - len(final)
+
+    stats = {
+        "avg_overexp_score" : avg_score,
+        "threshold_used"    : threshold,
+        "segment_dropped"   : seg_dropped,
+        "isolated_dropped"  : isolated_dropped,
+        "total_dropped"     : seg_dropped + isolated_dropped,
+        "remaining"         : len(final),
     }
     return final, stats
 
@@ -290,13 +384,31 @@ def process_dataset(raw_root, output_root, name, args):
         sharp_images = all_images
         print("\nStep 3: Blur filtering SKIPPED (pass --blur-fixed or --blur-percentile to enable)")
 
-    # Step 4 — subsample from the sharp pool
-    subsample = max(1, math.ceil(len(sharp_images) / args.target_images))
-    print(f"\nStep 4: Subsampling {len(sharp_images)} sharp frames "
+    # Step 4 — overexposure filtering (after blur filtering)
+    use_overexp = args.overexp_fixed is not None or args.overexp_percentile is not None
+    if use_overexp:
+        mode = (f"fixed threshold={args.overexp_fixed}"
+                if args.overexp_fixed is not None
+                else f"top {args.overexp_percentile}% percentile")
+        print(f"\nStep 4: Overexposure filtering [{mode}]  "
+              f"[window={args.overexp_window}, vote_fraction={args.overexp_vote_fraction}]")
+        expo_images, overexp_stats = apply_overexp_filter(images_dir, sharp_images, args)
+        print(f"  Segment-dropped  : {overexp_stats['segment_dropped']}")
+        print(f"  Isolated-dropped : {overexp_stats['isolated_dropped']}")
+        print(f"  Total dropped    : {overexp_stats['total_dropped']}  "
+              f"({overexp_stats['total_dropped'] / len(sharp_images) * 100:.1f}%)")
+        print(f"  Remaining        : {overexp_stats['remaining']}")
+    else:
+        expo_images = sharp_images
+        print("\nStep 4: Overexposure filtering SKIPPED (pass --overexp-fixed or --overexp-percentile to enable)")
+
+    # Step 5 — subsample from the filtered pool
+    subsample = max(1, math.ceil(len(expo_images) / args.target_images))
+    print(f"\nStep 5: Subsampling {len(expo_images)} frames "
           f"-> ~{args.target_images} (subsample every {subsample})")
     kept    = []
     skipped = 0
-    for i, fname in enumerate(sharp_images):
+    for i, fname in enumerate(expo_images):
         if i % subsample != 0:
             continue
         fid = parse_fid(fname)
@@ -312,8 +424,8 @@ def process_dataset(raw_root, output_root, name, args):
         print("  Image fids sample    :", [parse_fid(f) for f in sharp_images[:5]])
         return
 
-    # Step 5 — copy images to output
-    print("\nStep 5: Copying images to output folder...")
+    # Step 6 — copy images to output
+    print("\nStep 6: Copying images to output folder...")
     os.makedirs(out_img_dir, exist_ok=True)
     for fid, fname in kept:
         src = os.path.join(images_dir, fname)
@@ -321,8 +433,8 @@ def process_dataset(raw_root, output_root, name, args):
         shutil.copy(src, dst)
     print(f"  Copied {len(kept)} images -> {out_img_dir}")
 
-    # Step 6 — write COLMAP binaries
-    print("\nStep 6: Writing COLMAP binary files...")
+    # Step 7 — write COLMAP binaries
+    print("\nStep 7: Writing COLMAP binary files...")
     os.makedirs(sparse_dir, exist_ok=True)
     fid_list = [fid for fid, _ in kept]
 

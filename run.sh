@@ -17,6 +17,18 @@ set -e
 #   --blur-vote-fraction <F>    Fraction of window that must be blurry to drop
 #                               the whole segment. Default: 0.5 (Open-Sora 2.0)
 #
+# Overexposure filtering options (mutually exclusive — pick one):
+#   --overexp-fixed <F>          Drop frames with saturated-pixel fraction above F
+#                               e.g. --overexp-fixed 0.12
+#   --overexp-percentile <N>     Drop the top N% of frames per scene by overexp score
+#                               e.g. --overexp-percentile 10
+#
+# Overexposure segment options (work with either overexp mode):
+#   --overexp-window <N>         Sliding window size for consecutive detection
+#                               Default: 7
+#   --overexp-vote-fraction <F>  Fraction of window that must be overexposed to drop
+#                               the whole segment. Default: 0.5
+#
 # Other options:
 #   --output-name <NAME>        Override output folder name (e.g. 021_200)
 #   --target-images <N>         Images to subsample to (default: 400)
@@ -28,6 +40,8 @@ set -e
 #   ./run.sh 021 --blur-fixed 80 --blur-window 5 --blur-vote-fraction 0.6
 #   ./run.sh 021 --blur-fixed 80 --target-images 300
 #   ./run.sh 021 --output-name 021_200 --blur-percentile 10
+#   ./run.sh 021 --overexp-fixed 0.12
+#   ./run.sh 021 --overexp-percentile 10 --overexp-window 5 --overexp-vote-fraction 0.6
 # ──────────────────────────────────────────────────────────────────────────────
 
 if [ -z "$1" ]; then
