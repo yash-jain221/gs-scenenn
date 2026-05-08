@@ -5,6 +5,7 @@ import shutil
 import math
 import argparse
 import cv2
+import subprocess
 
 
 # ── CLI ARGS ─────────────────────────────────────────────────────────────────
@@ -42,6 +43,18 @@ def parse_args():
                         help="Consecutive-segment window size N for overexposure removal (default: 7)")
     parser.add_argument("--overexp-vote-fraction", type=float, default=0.5,
                         help="Fraction of window that must be overexposed to drop whole segment (default: 0.5)")
+    parser.add_argument(
+        "--use-colmap",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use COLMAP feature extraction/matching and point triangulation",
+    )
+    parser.add_argument(
+        "--colmap-exe",
+        type=str,
+        default="colmap",
+        help="COLMAP executable name or full path",
+    )
     return parser.parse_args()
 
 
@@ -309,6 +322,16 @@ def write_points3d_bin(path, ply_path, n_points=50000):
     print(f"  Wrote {len(pts)} points")
 
 
+def run_colmap(cmd_args):
+    print("  COLMAP:", " ".join(cmd_args))
+    subprocess.run(cmd_args, check=True)
+
+
+def write_empty_points3d_bin(path):
+    with open(path, "wb") as f:
+        f.write(struct.pack("<Q", 0))
+
+
 # ── UTILITIES ─────────────────────────────────────────────────────────────────
 def parse_fid(fname):
     stem   = os.path.splitext(fname)[0]
@@ -442,8 +465,51 @@ def process_dataset(raw_root, output_root, name, args):
     print("  OK cameras.bin")
     write_images_bin(os.path.join(sparse_dir, "images.bin"), all_poses, fid_list)
     print("  OK images.bin")
-    write_points3d_bin(os.path.join(sparse_dir, "points3D.bin"), ply_path)
-    print("  OK points3D.bin")
+
+    if args.use_colmap:
+        print("  Running COLMAP feature extraction, matching, and triangulation...")
+        db_path = os.path.join(output_dir, "database.db")
+        if os.path.exists(db_path):
+            os.remove(db_path)
+
+        points3d_path = os.path.join(sparse_dir, "points3D.bin")
+        if not os.path.exists(points3d_path):
+            write_empty_points3d_bin(points3d_path)
+
+        run_colmap([
+            args.colmap_exe,
+            "feature_extractor",
+            "--database_path", db_path,
+            "--image_path", out_img_dir,
+            "--ImageReader.single_camera", "1",
+            "--ImageReader.camera_model", "PINHOLE",
+            "--ImageReader.camera_params", f"{FX},{FY},{CX},{CY}",
+        ])
+        run_colmap([
+            args.colmap_exe,
+            "exhaustive_matcher",
+            "--database_path", db_path,
+        ])
+
+        tri_dir = os.path.join(output_dir, "sparse", "0_triangulated")
+        if os.path.isdir(tri_dir):
+            shutil.rmtree(tri_dir)
+        os.makedirs(tri_dir, exist_ok=True)
+        run_colmap([
+            args.colmap_exe,
+            "point_triangulator",
+            "--database_path", db_path,
+            "--image_path", out_img_dir,
+            "--input_path", sparse_dir,
+            "--output_path", tri_dir,
+        ])
+
+        shutil.rmtree(sparse_dir)
+        shutil.move(tri_dir, sparse_dir)
+        print("  OK points3D.bin (COLMAP triangulation)")
+    else:
+        write_points3d_bin(os.path.join(sparse_dir, "points3D.bin"), ply_path)
+        print("  OK points3D.bin (synthetic)")
 
     print(f"\n Done! Dataset ready at: {output_dir}")
 
