@@ -135,8 +135,8 @@ find_latest_checkpoint() {
 run_step_if_missing "download" "data/scenenn/raw/oni/${SCENE_ID}.oni" \
     python download_scenenn.py "$SCENE_ID"
 
-run_step_if_missing_dir "playback" "data/scenenn/raw/${SCENE_ID}" \
-    ./externals/scenenn/playback/playback \
+run_step_if_missing_dir "playback" "data/scenenn/raw/${SCENE_ID}/image" \
+        ./externals/scenenn/playback/playback \
         "data/scenenn/raw/oni/${SCENE_ID}.oni" \
         "data/scenenn/raw/${SCENE_ID}/"
 
