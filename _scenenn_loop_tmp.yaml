@@ -1,0 +1,90 @@
+Weights:
+  DA3: './weights/model.safetensors'
+  DA3_CONFIG: './weights/config.json'
+  SALAD: './weights/dino_salad.ckpt'
+
+Model:
+  # 60 frames fits within 32 GB VRAM (confirmed from batched pipeline).
+  # overlap=20 gives 33% coverage between adjacent chunks — enough for
+  # reliable Sim3 alignment in indoor rooms with moderate camera motion.
+  chunk_size: 60
+  overlap: 20
+
+  loop_chunk_size: 10   # imgs of loop chunk = 2 * loop_chunk_size (20 total)
+
+  # Set loop_enable: True once dino_salad.ckpt is downloaded into ./weights/
+  # (run: bash scripts/download_weights.sh)
+  # Loop closure is important for SceneNN's room-revisit patterns.
+  loop_enable: True
+
+  useDBoW: False
+  delete_temp_files: False   # keep for debugging first run; set True to save ~15 GiB
+
+  # Export 3D Gaussian Splat PLY alongside the point cloud.
+  # Adds infer_gs=True to each chunk's model.inference call (same VRAM as batched pipeline).
+  # Output: gs_ply/combined_gs.ply  (3DGS format, loadable in SuperSplat / gsplat eval)
+  # Per-chunk unaligned PLYs are kept in _tmp_gs_chunks/ for debugging.
+  export_gs: True
+
+  align_lib: 'torch'        # 'triton' is faster but needs compilation; 'torch' is safe default
+  align_method: 'sim3'      # sim3 handles scale drift between chunks
+  scale_compute_method: 'auto'
+  align_type: 'dense'
+
+  # saddle_balanced picks a well-distributed reference view — good for indoor scenes
+  # where any single frame might be low-texture.
+  ref_view_strategy: 'saddle_balanced'
+  ref_view_strategy_loop: 'saddle_balanced'
+
+  # Indoor rooms: max depth ~6–8 m. Clipping at 8 avoids fitting noise at long range.
+  depth_threshold: 8.0
+
+  save_depth_conf_result: True
+  save_debug_info: False
+
+  Sparse_Align:
+    keypoint_select: 'orb'
+    keypoint_num: 5000
+
+  IRLS:
+    delta: 0.1
+    max_iters: 5
+    tol: 1e-9
+
+  Pointcloud_Save:
+    # Denser sampling than outdoor (KITTI uses 0.015).
+    # Indoor rooms have small geometry detail so keep more points.
+    sample_ratio: 0.05
+    # Lower multiplier = keep more points in uncertain areas.
+    conf_threshold_coef: 0.5
+
+  Gaussians_Save:
+    # gs_views_interval: sample every Nth frame when building GS PLY.
+    # 1 = all frames → ~9M Gaussians/chunk (too large)
+    # 3 = every 3rd frame → ~2M Gaussians/chunk  ← recommended
+    # 5 = every 5th frame → ~1.2M Gaussians/chunk (smaller, less detail)
+    gs_views_interval: 8
+
+    # prune_by_depth_percent: per-view depth percentile cutoff.
+    # Gaussians farther than this percentile of each frame's depth range are pruned.
+    # 0.9 = keep closest 90%  (original, retains background walls)
+    # 0.75 = keep closest 75% ← recommended for indoor scenes (removes distant noise)
+    prune_by_depth_percent: 0.75
+
+    prune_border_gs: True   # always trim low-quality border Gaussians
+
+Loop:
+  SALAD:
+    image_size: [336, 336]
+    batch_size: 32
+    # Slightly lower threshold than default (0.85) to catch more loop candidates
+    # in indoor scenes where viewpoints may differ slightly even for revisits.
+    similarity_threshold: 0.80
+    top_k: 5
+    use_nms: True
+    nms_threshold: 20
+
+  SIM3_Optimizer:
+    lang_version: 'cpp'
+    max_iterations: 30
+    lambda_init: 1e-6
