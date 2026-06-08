@@ -26,6 +26,8 @@ SceneNN camera intrinsics (Asus Xtion Pro, 640x480):
     fx = fy = 544.47,  cx = 320.0,  cy = 240.0
 """
 
+import grp
+import pwd
 import os, sys, glob, struct, shutil, subprocess, argparse
 import numpy as np
 import cv2
@@ -151,7 +153,9 @@ def read_trajectory(path):
             i += 1
             continue
         try:
-            fid = int(parts[0])
+            # SceneNN images are 1-indexed (00001.png = frame 0) but trajectory
+            # is 0-indexed (entry 0 = frame 0).  Add 1 so keys match image fids.
+            fid = int(parts[0]) + 1
             mat = np.array([
                 list(map(float, lines[i+1].split())),
                 list(map(float, lines[i+2].split())),
@@ -283,9 +287,13 @@ def write_empty_points3d_bin(path):
     with open(path, "wb") as f:
         f.write(struct.pack("<Q", 0))
 
-def batch_frames(fid_list, batch_size):
-    """Split fid_list into batches of batch_size (no overlap)."""
-    return [fid_list[i:i + batch_size] for i in range(0, len(fid_list), batch_size)]
+def batch_frames(fid_list, batch_size, overlap=0):
+    """Split fid_list into batches with optional overlap in frames."""
+    if batch_size <= 0:
+        return [fid_list]
+    overlap = max(0, min(overlap, batch_size - 1))
+    step = batch_size - overlap
+    return [fid_list[i:i + batch_size] for i in range(0, len(fid_list), step)]
 
 # ── Steps 5–7 — COLMAP triangulation ─────────────────────────────────────────
 def run_colmap_triangulation(colmap_exe, output_dir, sparse_dir, use_gpu=True):
@@ -350,7 +358,9 @@ def main():
     ap.add_argument("--skip_colmap",    action="store_true",
                     help="Skip COLMAP triangulation (just prepare images + poses)")
     ap.add_argument("--batch_size", type=int, default=0,
-                help="If >0, split selected frames into batches of this size")
+                    help="If >0, split selected frames into batches of this size")
+    ap.add_argument("--batch_overlap", type=int, default=0,
+                    help="Number of overlapping frames between consecutive batches")
     args = ap.parse_args()
 
     scene_dir  = os.path.abspath(args.scene_dir)
@@ -358,6 +368,14 @@ def main():
     output_dir = os.path.abspath(args.output_dir) if args.output_dir else \
                  os.path.join(os.path.dirname(scene_dir), f"colmap_{scene_name}")
     sparse_dir = os.path.join(output_dir, "sparse", "0")
+
+    # uid = pwd.getpwnam("yash").pw_uid   # or os.environ["SUDO_USER"] if running via sudo
+    # gid = grp.getgrnam("yash").gr_gid
+    # # os.chown(output_dir, uid, gid)
+    # os.chown(sparse_dir, uid, gid)
+    # os.chmod(output_dir, 0o755)
+    # os.chmod(sparse_dir, 0o755)
+    # os.chmod(scene_dir, 0o755)
 
     print("=" * 60)
     print(f"Scene          : {scene_dir}")
@@ -393,8 +411,11 @@ def main():
         # ── batch or single output ───────────────────────────────────────────────
 
     if args.batch_size > 0:
-        batches = batch_frames(matched, args.batch_size)
-        print(f"\nBatching: {len(matched)} frames → {len(batches)} batches of ≤{args.batch_size}")
+        batches = batch_frames(matched, args.batch_size, args.batch_overlap)
+        print(
+            f"\nBatching: {len(matched)} frames → {len(batches)} batches "
+            f"of ≤{args.batch_size} (overlap={args.batch_overlap})"
+        )
     else:
         batches = [matched]   # single "batch" = original behaviour
 
