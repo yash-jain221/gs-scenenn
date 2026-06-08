@@ -7,3 +7,6 @@
 [submodule "externals/depth_anything_3"]
 	path = externals/depth_anything_3
 	url = https://github.com/ByteDance-Seed/Depth-Anything-3.git
+[submodule "externals/AnySplat"]
+	path = externals/AnySplat
+	url = https://github.com/OpenRobotLab/AnySplat.git
